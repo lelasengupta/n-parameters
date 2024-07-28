@@ -12,35 +12,85 @@ execute:
 
 library(tidyverse)
 library(primer.data)
+library(brms)
+library(tidybayes)
+library(gtsummary)
 ```
 
 ```{r}
-set.seed(9)
-
-ch10_data <- shaming |>
-mutate(p_00 = (primary_00 == "Yes"), p_02 = (primary_02 == "Yes"),
-       p_04 = (primary_04 == "Yes"), g_00 = (general_00 == "Yes"),
-       g_02 = (general_02 == "Yes"), g_04 = (general_04 == "Yes"),
-civ_engage = p_00 + p_02 + p_04 + g_00 + g_02 + g_04,
-voter_class = case_when(civ_engage %in% c(5, 6) ~ "Always Vote",
-                        civ_engage %in% c(3, 4) ~ "Sometimes Vote",
-                        civ_engage %in% c(1, 2) ~ "Rarely Vote"),
-voter_class = factor(voter_class, levels = c("Rarely Vote", "Sometimes Vote", "Always Vote")), age_z = as.numeric(scale(age))) |>
-rename(voted = primary_06) |>
-select(voted, treatment, sex, age_z, civ_engage, voter_class) |>
-drop_na() |>
-slice_sample(prop = 0.1)
-
-ch10_data |>
-sample_frac(0.5) |>
-ggplot(aes(x = civ_engage, y = voted)) +
-geom_jitter(alpha = 0.03, height = 0.1) +
-scale_x_continuous(breaks = 1:6) +
-scale_y_continuous(breaks = c(0,1), labels = c("No", "Yes")) +
-labs(title = "Postcards and Voting Behavior in Michigan",
-     x = "Postcard Type",
-     y = "Voted in 2006 Primary Election",
-     subtitle = "Most residents did not recieve a postcard")
+#| label: model
+#| cache: true
+fit_postcard_vote <- brm(formula = voted ~ age_z + sex + treatment + voter_class + treatment*voter_class,
+data = ch10_data, family = gaussian(),
+refresh = 0, silent = 2,
+seed = 19)
 ```
 
-Using data examining how social pressures affected voters in the 2006 primary election in Michigan, we seek to understand the causal effect of sending postcards to voters in the upcoming Texas gubernatorial election in 2026. Voters in Texas and Michigan behave differently from each other due to each state's political climate. 
+```{r}
+#| label: plot
+
+sex <- "Male"
+age_z <- 0
+treatment <- c("No Postcard",
+               "Civic Duty",
+               "Hawthorne",
+               "Self",
+               "Neighbors")
+voter_class <- c("Always Vote",
+                 "Sometimes Vote",
+                 "Rarely Vote")
+
+newdata <- expand_grid(sex, age_z, treatment, voter_class) |>
+  mutate(names = paste(treatment, voter_class, sep = "_"))
+
+plot_data <- fit_postcard_vote |>
+add_epred_draws(newdata = newdata) |>
+ungroup() |>
+select(names, .epred) |>
+pivot_wider(names_from = names, values_from = .epred, values_fn = list) |>
+unnest(cols = everything()) |>
+janitor::clean_names() |>
+mutate(`Always Civic-Duty`    = civic_duty_always_vote     - no_postcard_always_vote,
+         `Always Hawthorne`     = hawthorne_always_vote      - no_postcard_always_vote,
+         `Always Self`          = self_always_vote           - no_postcard_always_vote,
+         `Always Neighbors`     = neighbors_always_vote      - no_postcard_always_vote,
+         `Sometimes Civic-Duty` = civic_duty_sometimes_vote  - no_postcard_sometimes_vote,
+         `Sometimes Hawthorne`  = hawthorne_sometimes_vote   - no_postcard_sometimes_vote,
+         `Sometimes Self`       = self_sometimes_vote        - no_postcard_sometimes_vote,
+         `Sometimes Neighbors`  = neighbors_sometimes_vote   - no_postcard_sometimes_vote,
+         `Rarely Civic-Duty`    = civic_duty_rarely_vote     - no_postcard_rarely_vote,
+         `Rarely Hawthorne`     = hawthorne_rarely_vote      - no_postcard_rarely_vote,
+         `Rarely Self`          = self_rarely_vote           - no_postcard_rarely_vote,
+         `Rarely Neighbors`     = neighbors_rarely_vote      - no_postcard_rarely_vote) |>
+pivot_longer(names_to = c("Voter Class", "Group"),
+               names_sep = " ",
+               values_to = "values",
+               cols = `Always Civic-Duty`:`Rarely Neighbors`) |>
+               mutate(`Voter Class` = fct_relevel(factor(`Voter Class`),
+                                     c("Rarely",
+                                       "Sometimes",
+                                       "Always")))
+
+plot_data |>
+ggplot(aes(x = values, y = fct_reorder(Group, values))) +
+ stat_slab(aes(fill = `Voter Class`),
+              position = 'dodge') +
+scale_x_continuous(labels = scales::percent_format(accuracy = 1),
+                   breaks = seq(-0.05, 0.11, 0.01)) +
+labs(title = "Treatment Effects on the Probability of Voting",
+     subtitle = "Postcards work less well on those who rarely vote",
+     x = "Treatment effect",
+     y = "Postcard Type",
+     caption = "Source: Gerber, Green, and Larimer (2008)")
+```
+
+Using data examining how social pressure affected voters in the 2006 primary election in Michigan, we seek to understand the causal effect of sending postcards to voters in the upcoming Texas gubernatorial election in 2026. Voters in Texas and Michigan behave differently from each other due to each state's political climate. We modeled primary_06, a binary variable indicating the type of postcard an individual received and whether they voted in the 2006 primary election. People who voted before are likely to vote again. The causal effect is greatest for people who voted in previous elections who received the neighbors postcard, centered at about 9% with a 95% confidence interval of 8% and 10%. 
+
+
+$$y_{i} = \beta_{0} + \beta_{1} age\_z + \beta_{2}male_i + \beta_{3}civic\_duty_i + \\ \beta_{4}hawthorne_i + \beta_{5}self_i + \beta_{6}neighbors_i + \\ \beta_{7}Sometimes\ vote_i + \beta_{8}Always\ vote_i + \\ \beta_{9}civic\_duty_i Sometimes\ vote_i + \beta_{10}hawthorne_i Sometimes\ vote_i + \\ \beta_{11}self_i Sometimes\ vote_i + \beta_{11}neighbors_i Sometimes\ vote_i + \\ \beta_{12}civic\_duty_i Always\ vote_i + \beta_{13}hawthorne_i Always\ vote_i + \\ \beta_{14}self_i Always\ vote_i + \beta_{15}neighbors_i Always\ vote_i + \epsilon_{i}$$
+
+```{r}
+fit_postcard_vote |>
+tbl_regression(intercept = TRUE, estimate_fun = function(x) style_sigfig(x, digits = 3))
+
+```
