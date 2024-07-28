@@ -43,4 +43,4 @@ labs(title = "Postcards and Voting Behavior in Michigan",
      subtitle = "Most residents did not recieve a postcard")
 ```
 
-Using data from voters in the 2006 primary election in Michigan, we seek to understand the causal effect of sending postcards to voters in the upcoming Texas gubernatorial election in 2026. 
+Using data examining how social pressures affected voters in the 2006 primary election in Michigan, we seek to understand the causal effect of sending postcards to voters in the upcoming Texas gubernatorial election in 2026. Voters in Texas and Michigan behave differently from each other due to each state's political climate. 
